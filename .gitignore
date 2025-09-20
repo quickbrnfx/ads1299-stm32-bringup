@@ -1,0 +1,24 @@
+# Build artifacts
+**/Debug/
+**/Release/
+**/build/
+*.o
+*.d
+*.map
+*.elf
+*.bin
+*.hex
+
+# IDE-specific
+.settings/
+.cproject
+.project
+*.launch
+
+# Temporary
+*.swp
+.DS_Store
+Thumbs.db
+
+# VSCode (if you use it)
+.vscode/
