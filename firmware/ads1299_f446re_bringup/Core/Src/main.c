@@ -77,12 +77,14 @@ void SystemClock_Config(void);
 
 #include <stdio.h>
 #include <string.h>
-
+/* RX buffer holds latest ADS1299 frame; zeros generate clocks */
 static uint8_t frame[27];
 static uint8_t zeros27[27] = {0};               // clocks SPI, tx dummy
-static volatile uint8_t spi_busy = 0;
-static volatile uint32_t drdy_isr_count = 0;
-static volatile uint32_t dma_done_count = 0;
+
+/* ISR-visible flags/counters must be volatile */
+static volatile uint8_t spi_busy = 0; // 1 while a DMA transfer is active
+static volatile uint32_t drdy_isr_count = 0; // EXTI interrupts per second (sanity)
+static volatile uint32_t dma_done_count = 0; // DMA completions per second (sanity)
 
 static inline void CS_L(void){ HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET); }
 static inline void CS_H(void){ HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);  }
@@ -127,9 +129,9 @@ int main(void)
   /* USER CODE END SysInit */
 
   /* Initialize all configured peripherals */
-  MX_GPIO_Init();
+  MX_GPIO_Init(); //init GPIOs first for no conflict
   MX_DMA_Init();
-  MX_SPI1_Init();
+  MX_SPI1_Init(); //moved SPI init before USART2 to solve DMA issue
   MX_USART2_UART_Init();
 
   /* USER CODE BEGIN 2 */
@@ -137,13 +139,13 @@ int main(void)
 
   // Known idle
   CS_H();
-  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET); // START low
+  HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET); // START low, no conversion yet
 
-  // Reset pulse  (PB1), keep HIGH during normal operation, active LOW
+  // Reset pulse  (PB1), keep HIGH during normal operation, active LOW, pulse when ready
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET); HAL_Delay(1);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);   HAL_Delay(10);
 
-  // RDATAC (0x10)
+  // Put ADS1299 into RDATAC (continuous read) mode: send 0x10 with CS low.
   CS_L(); HAL_SPI_Transmit(&hspi1,(uint8_t[]){0x10},1,10); CS_H(); HAL_Delay(1);
 
   // START (PB2) HIGH, begin conversions
@@ -151,12 +153,21 @@ int main(void)
 
   HAL_UART_Transmit(&huart2,(uint8_t*)"EXTI+DMA ready\r\n",16,100);
 
+  // Boot message (confirms we reached here)
+   const char *hello = "ADS1299 ready: DRDY->EXTI, SPI1 TxRx DMA, 1Hz prints\r\n";
+   HAL_UART_Transmit(&huart2, (uint8_t*)hello, strlen(hello), 100);
+
 
   /* USER CODE END 2 */
 
 
 
   /* Infinite loop */
+
+   /* =========================
+      Main loop: no polling for DRDY here.
+      ISRs (EXTI/DMA) move data; we just summarize once per second.
+      ========================= */
 
   /* USER CODE BEGIN WHILE */
   uint32_t last_ms = 0;
@@ -166,13 +177,13 @@ int main(void)
     if (now - last_ms >= 1000) {
       last_ms = now;
 
-      // Decode Ch1..Ch8 from most recent frame
+      // Parse latest frame into signed 32-bit samples
       int32_t ch[8];
       for (int i=0; i<8; i++){
         int k = 3 + i*3;
         ch[i] = s24_to_s32(frame[k], frame[k+1], frame[k+2]);
       }
-
+      // Print structured, CSV-like one-line summary: easy to log/plot.
       char buf[256];
       int n = snprintf(buf, sizeof(buf),
         "DRDY/s=%lu DMA/s=%lu  S:%02X %02X %02X  "
@@ -183,6 +194,7 @@ int main(void)
         (long)ch[4], (long)ch[5], (long)ch[6], (long)ch[7]);
       HAL_UART_Transmit(&huart2,(uint8_t*)buf, n, 200);
 
+      // Reset 1-second counters
       drdy_isr_count = 0;
       dma_done_count = 0;
     }
@@ -249,25 +261,28 @@ void SystemClock_Config(void)
 /* USER CODE BEGIN 4 */
 
 /* USER CODE BEGIN 4 */
+
+// DRDY falls, EXT1 callback fires
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin)
 {
-  if (GPIO_Pin == GPIO_PIN_0)  // PB0 → DRDY
+  if (GPIO_Pin == GPIO_PIN_0)  // PB0 = DRDY
   {
     drdy_isr_count++;
-    if (!spi_busy) {
+    if (!spi_busy) { //ensure one transfer at a time
       spi_busy = 1;
-      CS_L();
-      HAL_SPI_TransmitReceive_DMA(&hspi1, zeros27, frame, sizeof(frame));
+      CS_L(); //CS low for the whole frame
+      // TransmitReceive DMA: send zeros to clock 27 bytes in on MISO
+      HAL_SPI_TransmitReceive_DMA(&hspi1, zeros27, frame, sizeof(frame)); //use zeros27 provides 27 clock bytes so we can capture 27 return bytes into frame
     }
   }
 }
-
+// DMA finishes, SPI DMA completes callback
 void HAL_SPI_TxRxCpltCallback(SPI_HandleTypeDef *hspi)
 {
   if (hspi->Instance == SPI1) {
-    CS_H();
-    spi_busy = 0;
-    dma_done_count++;
+    CS_H(); // end transaction
+    spi_busy = 0; // allow next EXT1 to start a DMA
+    dma_done_count++; // 1 Hz check
   }
 }
 
