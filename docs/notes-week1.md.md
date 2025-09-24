@@ -1,21 +1,21 @@
 # Week 1 Notes
 
 ## Goals
-- Bring up ADS1299; prove DRDY-paced frames.
-- Build firmware I/O path: EXTI (DRDY) → SPI DMA (27 bytes) → UART print.
+- Set up repo for transparency.
+- First bring-up of STM32F446RE + ADS1299.
+- Verify EXTI → SPI DMA → UART data path.
 
-## Key decisions
-- SPI Mode-1 (CPOL=0, CPHA=2nd edge) to match ADS1299 timing.
-- Software-controlled CS (PA4).
-- EXTI on PB0 (falling) to sync with DRDY low.
-- DMA TxRx with zero buffer to guarantee SCK clocks.
+## Key Learnings
+- `RESETB` being held low prevented DRDY from toggling.
+- CubeMX GPIO speed settings affect actual toggle frequency (verified).
+- SPI Mode-1 (CPOL=0, CPHA=2) required for ADS1299.
+- UART printing must not happen in ISRs (moved to main loop).
 
-## Lessons learned
-- RESETB held low = no DRDY. Releasing RESETB (PB1) fixed it.
-- START high + RDATAC required for continuous frames.
-- Printing in ISRs is fragile; throttle prints from main loop.
+## Milestone
+- Captured first 27-byte ADS1299 frame through SPI DMA.
+- Verified DRDY interrupt rate ~250 Hz matches expected sample rate.
 
-## Next
-- CSV logging per frame.
-- Python live plot.
-- Circular DMA or double buffering.
+## Next Steps
+- Structured CSV logging.
+- Simple visualization (Python/Excel).
+- Begin Phase 2 prep: BLDC control path.
