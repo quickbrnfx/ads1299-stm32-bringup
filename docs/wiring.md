@@ -2,6 +2,7 @@
 
 Power: MMB0 supplies analog/digital. *Do not* back-feed 3V3 from Nucleo. Common GND required.
 
+
 | Signal  | ADS1299 FE Header | STM32 Pin | Notes |
 |---------|--------------------|-----------|-------|
 | CS̄     | J3-7               | PA4       | JP21 = 2–3 (external CS) |
@@ -14,4 +15,6 @@ Power: MMB0 supplies analog/digital. *Do not* back-feed 3V3 from Nucleo. Common 
 | UART TX | —                  | PA2       | 115200 |
 | UART RX | —                  | PA3       | 115200 |
 
-**Jumpers:** JP21=2–3, JP22=2–3.
+**Jumpers:**  
+- JP21 → 2–3 (external CS)  
+- JP22 → 2–3 (external START)  
