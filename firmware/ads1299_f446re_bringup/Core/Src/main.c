@@ -59,11 +59,27 @@ void SystemClock_Config(void);
 
 /* USER CODE BEGIN 0 */
 
+/*
+  ADS1299 streaming path:
+  - DRDY (PB0, falling edge) -> HAL_GPIO_EXTI_Callback
+  - In EXTI: assert CS (PA4 low), start SPI1 TxRx DMA for 27 bytes
+      27 = 3 status + 8 * 3-byte channels (24-bit two's complement)
+  - DMA complete -> HAL_SPI_TxRxCpltCallback
+      de-assert CS (PA4 high), increase counter
+  - Main loop prints once per second
+
+  Rationale:
+  - EXTI aligns and reads to ADS1299's data-ready timing.
+  - TxRx DMA guarantees SCK clocks.
+  - Keep ISRs short; do prints/work in main loop to avoid missed frames.
+*/
+
+
 #include <stdio.h>
 #include <string.h>
 
 static uint8_t frame[27];
-static uint8_t zeros27[27] = {0};               // clocks SPI
+static uint8_t zeros27[27] = {0};               // clocks SPI, tx dummy
 static volatile uint8_t spi_busy = 0;
 static volatile uint32_t drdy_isr_count = 0;
 static volatile uint32_t dma_done_count = 0;
@@ -71,11 +87,14 @@ static volatile uint32_t dma_done_count = 0;
 static inline void CS_L(void){ HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_RESET); }
 static inline void CS_H(void){ HAL_GPIO_WritePin(GPIOA, GPIO_PIN_4, GPIO_PIN_SET);  }
 
-static inline int32_t s24_to_s32(uint8_t b2, uint8_t b1, uint8_t b0){
-  int32_t v = ((int32_t)b2<<16) | ((int32_t)b1<<8) | b0;
+// ADS1299 channels are 24-bit two's complement: [MSB .. LSB] = [b23..b0].
+// Sign-extend to 32-bit by propagating bit 23 (0x00800000) into the upper byte.
+static inline int32_t ads_s24_to_s32(uint8_t msb, uint8_t mid, uint8_t lsb){
+  int32_t v = ((int32_t)msb<<16) | ((int32_t)mid<<8) | lsb;
   if (v & 0x00800000) v |= 0xFF000000;
   return v;
 }
+
 
 /* USER CODE END 0 */
 
@@ -120,14 +139,14 @@ int main(void)
   CS_H();
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_RESET); // START low
 
-  // Reset pulse
+  // Reset pulse  (PB1), keep HIGH during normal operation, active LOW
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_RESET); HAL_Delay(1);
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_1, GPIO_PIN_SET);   HAL_Delay(10);
 
   // RDATAC (0x10)
   CS_L(); HAL_SPI_Transmit(&hspi1,(uint8_t[]){0x10},1,10); CS_H(); HAL_Delay(1);
 
-  // START high
+  // START (PB2) HIGH, begin conversions
   HAL_GPIO_WritePin(GPIOB, GPIO_PIN_2, GPIO_PIN_SET);
 
   HAL_UART_Transmit(&huart2,(uint8_t*)"EXTI+DMA ready\r\n",16,100);
